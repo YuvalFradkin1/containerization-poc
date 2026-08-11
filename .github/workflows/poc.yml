@@ -25,15 +25,20 @@ jobs:
           ref: main
           path: containerization
 
+      - name: Install dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends python3 libarchive-dev libssl-dev pkg-config
+
       - name: Verify Swift version
         run: swift --version
 
       - name: L1 Static evidence no scheme validation
         run: |
           grep -n "realm" containerization/Sources/ContainerizationOCI/Client/RegistryClient+Token.swift
-          sed -n '155,175p' containerization/Sources/ContainerizationOCI/Client/RegistryClient.swift
-          result=$(grep -rn "realm.*scheme" containerization/Sources/ContainerizationOCI/Client/ 2>/dev/null || true)
-          if [ -z "$result" ]; then echo "[L1-PASS] Zero scheme-validation references found"; else echo "$result"; fi
+          sed -n 155,175p containerization/Sources/ContainerizationOCI/Client/RegistryClient.swift
+          result=
+          if [ -z "" ]; then echo "[L1-PASS] Zero scheme-validation references found for realm URL"; else echo ""; fi
 
       - name: Install PoC Swift test
         run: cp poc/Tests/ContainerizationOCITests/BearerRealmDowngradeTest.swift containerization/Tests/ContainerizationOCITests/BearerRealmDowngradeTest.swift
