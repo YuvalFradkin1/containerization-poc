@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends python3 libarchive-dev libssl-dev pkg-config
+          apt-get install -y --no-install-recommends python3 libarchive-dev libssl-dev pkg-config netcat-openbsd
 
       - name: Verify Swift version
         run: swift --version
@@ -43,29 +43,29 @@ jobs:
       - name: Install PoC Swift test
         run: cp poc/Tests/ContainerizationOCITests/BearerRealmDowngradeTest.swift containerization/Tests/ContainerizationOCITests/BearerRealmDowngradeTest.swift
 
-      - name: Build ContainerizationOCI tests
-        working-directory: containerization
-        run: swift build --target ContainerizationOCI 2>&1 | tail -5
-
-      - name: Run E2E - start servers and Swift test together
+      - name: Run E2E
         run: |
           python3 poc/scripts/evil_registry.py > /tmp/capture.log 2>&1 &
           SERVER_PID=$!
-          sleep 2
-          echo "[*] Server PID: $SERVER_PID"
+          echo "[*] Waiting for servers to be ready..."
+          for i in 1 2 3 4 5; do
+            sleep 1
+            nc -z localhost 5001 2>/dev/null && nc -z localhost 5002 2>/dev/null && echo "[*] Servers ready" && break
+            echo "[*] Attempt $i: servers not ready yet"
+          done
           cat /tmp/capture.log
           cd containerization
           EVIL_REGISTRY_RUNNING=1 swift test --filter BearerRealmDowngradeTest 2>&1 | tee /tmp/swift_test.txt
-          wait $SERVER_PID 2>/dev/null || true
+          kill $SERVER_PID 2>/dev/null || true
 
-      - name: E2E results
+      - name: Results
         run: |
           echo "=== Capture server log ==="
           cat /tmp/capture.log
           echo "=== Swift test tail ==="
           tail -20 /tmp/swift_test.txt
           grep -q "L1-PASS" /tmp/swift_test.txt && echo "[RESULT] L1+L2 PASS" || true
-          grep -q "TLS-downgrade\|Basic.*credentials" /tmp/capture.log && echo "[RESULT] E2E PASS" || true
+          grep -q "TLS-downgrade\|PASS.*TLS\|Basic.*credentials" /tmp/capture.log && echo "[RESULT] E2E PASS" || true
 
       - name: Upload artifacts
         if: always()
