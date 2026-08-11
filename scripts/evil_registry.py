@@ -64,7 +64,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
 
 def run_server(handler, port):
-    srv = HTTPServer(("localhost", port), handler)
+    srv = HTTPServer(("0.0.0.0", port), handler)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     return srv
