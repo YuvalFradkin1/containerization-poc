@@ -80,7 +80,7 @@ if __name__ == "__main__":
     print(f"[*] Capture server listening on http://localhost:{CAPTURE_PORT}", flush=True)
     print("[*] Waiting for RegistryClient connection (30 s)...", flush=True)
 
-    deadline = time.time() + 30
+    deadline = time.time() + 600
     while time.time() < deadline:
         with CAPTURE_LOCK:
             if CAPTURE_LOG:
